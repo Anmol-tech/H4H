@@ -19,12 +19,6 @@ export default function Sponsors() {
                     AMD
                 </div>
 
-                <div className="sponsor-item">
-                    <span className="sponsor-icon">
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" /></svg>
-                    </span>
-                    CrowdStrike
-                </div>
             </div>
         </footer>
     );
