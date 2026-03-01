@@ -133,6 +133,15 @@ export default function FormSession({ pdfUrl, fileName, liveAnswers, analyzedQue
         // Would replay the audio question — for now it's a no-op
     };
 
+    const handlePrevField = () => {
+        if (currentIndex > 0) {
+            setCurrentIndex((prev) => prev - 1);
+            setPhase('asking');
+            setLastTranscript('');
+            setAudioError('');
+        }
+    };
+
     const handleNextField = () => {
         if (phase === 'asking') {
             // Skip this field
@@ -291,11 +300,18 @@ export default function FormSession({ pdfUrl, fileName, liveAnswers, analyzedQue
 
                         {/* Actions */}
                         <div className="voice-actions">
+                            <button
+                                className="voice-action-btn"
+                                onClick={handlePrevField}
+                                disabled={currentIndex === 0}
+                            >
+                                ← Previous
+                            </button>
                             <button className="voice-action-btn" onClick={handleReplay}>
-                                🔁 Replay Question
+                                🔁 Replay
                             </button>
                             <button className="voice-action-btn primary" onClick={handleNextField}>
-                                Next Field →
+                                Skip →
                             </button>
                         </div>
                     </>
