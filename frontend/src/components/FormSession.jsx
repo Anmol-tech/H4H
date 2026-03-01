@@ -5,11 +5,12 @@ export default function FormSession({ pdfUrl, fileName, liveAnswers, analyzedQue
     const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
     const [currentIndex, setCurrentIndex] = useState(0);
     const [answers, setAnswers] = useState({});
-    const [phase, setPhase] = useState('asking'); // asking | confirming | complete
+    const [phase, setPhase] = useState('asking'); // asking | verifying | invalid | confirming | complete
     const [isListening, setIsListening] = useState(false);
     const [uploadingAudio, setUploadingAudio] = useState(false);
     const [audioError, setAudioError] = useState('');
     const [lastTranscript, setLastTranscript] = useState('');
+    const [verifyFeedback, setVerifyFeedback] = useState('');
     const [isEditing, setIsEditing] = useState(false);
     const [editValue, setEditValue] = useState('');
 
@@ -79,6 +80,7 @@ export default function FormSession({ pdfUrl, fileName, liveAnswers, analyzedQue
         setAnswers({});
         setPhase('asking');
         setLastTranscript('');
+        setVerifyFeedback('');
         setIsEditing(false);
         setEditValue('');
     }, [analyzedQuestions]);
@@ -106,13 +108,45 @@ export default function FormSession({ pdfUrl, fileName, liveAnswers, analyzedQue
             const data = await res.json();
             const transcript = data.transcript || '';
             setLastTranscript(transcript);
-            setPhase('confirming');
+            await verifyTranscript(transcript);
         } catch (err) {
             console.error(err);
             setAudioError(`Transcription failed: ${err.message}`);
             setPhase('asking');
         } finally {
             setUploadingAudio(false);
+        }
+    };
+
+    // Structured field types (phone, date, ssn, yes_no, choice, checkbox)
+    // are sent to the LLM to validate format and clean up the answer.
+    const verifyTranscript = async (transcript) => {
+        setPhase('verifying');
+        try {
+            const res = await fetch(`${API_BASE}/llm/verify-answer`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    question: current.label,
+                    field_type: current.type,
+                    answer: transcript,
+                    options: current.options || null,
+                }),
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.valid) {
+                    setLastTranscript(data.formatted_answer || transcript);
+                    setPhase('confirming');
+                } else {
+                    setVerifyFeedback(data.feedback || "That doesn't seem right. Could you try again?");
+                    setPhase('invalid');
+                }
+            } else {
+                setPhase('confirming'); // verify failed — fall through
+            }
+        } catch {
+            setPhase('confirming'); // network error — fall through
         }
     };
 
@@ -174,6 +208,7 @@ export default function FormSession({ pdfUrl, fileName, liveAnswers, analyzedQue
             // Retry
             setPhase('asking');
             setLastTranscript('');
+            setVerifyFeedback('');
             setIsEditing(false);
             setEditValue('');
         }
@@ -376,6 +411,30 @@ export default function FormSession({ pdfUrl, fileName, liveAnswers, analyzedQue
                             <span style={{ marginRight: '0.5rem' }}>📄</span>
                             Download Filled PDF
                         </button>
+                    </div>
+                ) : phase === 'verifying' ? (
+                    <div className="voice-confirmation">
+                        <div className="analyzing-spinner" style={{ marginBottom: '1rem' }}></div>
+                        <p className="voice-confirmation-heard">Checking your answer...</p>
+                        <p className="voice-confirmation-value">"{lastTranscript}"</p>
+                    </div>
+                ) : phase === 'invalid' ? (
+                    <div className="voice-confirmation">
+                        <p className="voice-confirmation-heard" style={{ color: '#e05' }}>⚠ Hmm, that doesn't match</p>
+                        <p className="voice-confirmation-value">"{lastTranscript}"</p>
+                        <p className="voice-confirmation-prompt">{verifyFeedback}</p>
+                        <div className="confirm-actions">
+                            <button className="confirm-btn no" onClick={() => {
+                                setPhase('asking');
+                                setLastTranscript('');
+                                setVerifyFeedback('');
+                            }}>🎙 Try Again</button>
+                            <button className="confirm-btn edit" onClick={() => {
+                                setEditValue(lastTranscript);
+                                setIsEditing(true);
+                                setPhase('confirming');
+                            }}>✏️ Type Instead</button>
+                        </div>
                     </div>
                 ) : phase === 'confirming' ? (
                     <div className="voice-confirmation">

@@ -11,8 +11,10 @@ from models.schemas import (
     AnalyzePdfRequest,
     AnalyzePdfResponse,
     FormQuestion,
+    VerifyAnswerRequest,
+    VerifyAnswerResponse,
 )
-from services.llm import chat, extract_content, build_image_message, analyze_pdf_form
+from services.llm import chat, extract_content, build_image_message, analyze_pdf_form, verify_answer
 from services.utils.tts_cache import audio_filename, ensure_all_audio
 
 # Upload directory (same as routers/upload.py)
@@ -142,3 +144,20 @@ async def analyze_pdf(body: AnalyzePdfRequest, background_tasks: BackgroundTasks
         completion_tokens=result["completion_tokens"],
         total_tokens=result["total_tokens"],
     )
+
+
+@router.post("/verify-answer", response_model=VerifyAnswerResponse)
+async def verify_answer_endpoint(body: VerifyAnswerRequest):
+    """
+    Validate and format a user's spoken answer against its form field.
+
+    Returns whether the answer is valid for the field type, a cleaned
+    formatted version, and (when invalid) a friendly re-ask message.
+    """
+    result = await verify_answer(
+        question=body.question,
+        field_type=body.field_type,
+        answer=body.answer,
+        options=body.options,
+    )
+    return VerifyAnswerResponse(**result)

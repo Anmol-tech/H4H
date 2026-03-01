@@ -124,7 +124,10 @@ def build_multi_image_message(
 
 # ── Patterns that indicate a non-fillable statement (used for post-filtering) ──
 _NON_FIELD_PATTERNS: list[re.Pattern] = [
-    re.compile(r"\bI\s+(authorize|certify|agree|acknowledge|understand|consent|attest|swear|affirm|declare|verify)\b", re.I),
+    re.compile(
+        r"\bI\s+(authorize|certify|agree|acknowledge|understand|consent|attest|swear|affirm|declare|verify)\b",
+        re.I,
+    ),
     re.compile(r"\b(penalty|penalties)\s+of\s+(perjury|law)\b", re.I),
     re.compile(r"\bprivacy\s+act\b", re.I),
     re.compile(r"\bpaperwork\s+(reduction|burden)\b", re.I),
@@ -174,7 +177,7 @@ FORM_ANALYSIS_PROMPT = (
     '  × "Penalty for false statements..."\n'
     '  × "Privacy Act Statement..."\n'
     '  × Any sentence that starts with "I authorize", "I certify", "I agree", "I understand", "I acknowledge"\n'
-    "If you are unsure whether something is a fillable field, ask yourself: \"Is there a blank for the person to write in?\"\n"
+    'If you are unsure whether something is a fillable field, ask yourself: "Is there a blank for the person to write in?"\n'
     "If the answer is no, DO NOT include it.\n\n"
     "CRITICAL INSTRUCTIONS - READ CAREFULLY:\n"
     "1. SCAN EVERY SINGLE PAGE COMPLETELY:\n"
@@ -422,7 +425,9 @@ def _parse_questions_json(raw: str) -> list[dict[str, Any]]:
         questions.append(question)
 
     if filtered_count:
-        logger.info(f"Post-filter removed {filtered_count} non-fillable items from LLM output")
+        logger.info(
+            f"Post-filter removed {filtered_count} non-fillable items from LLM output"
+        )
 
     # Deduplicate by field_name — if two entries share a field_name but have
     # different labels, keep both and suffix the later one to make it unique.
@@ -450,3 +455,97 @@ def _parse_questions_json(raw: str) -> list[dict[str, Any]]:
         q["id"] = i
 
     return deduped
+
+
+async def verify_answer(
+    question: str,
+    field_type: str,
+    answer: str,
+    options: list[str] | None = None,
+) -> dict:
+    """
+    Ask the LLM to validate and format a user's spoken answer.
+
+    Returns a dict with:
+        valid (bool)            — True if the answer is appropriate for the question
+        formatted_answer (str)  — answer cleaned up for the field type
+        feedback (str)          — friendly re-ask message when invalid, else ""
+    """
+    # Free-text fields (names, addresses, general text) accept any non-empty
+    # answer — use the LLM only to clean up spoken artifacts, never to reject.
+    FREE_TEXT_TYPES = {"text", "address", "email"}
+    is_free_text = field_type in FREE_TEXT_TYPES or not field_type
+
+    options_hint = f"\nValid options: {', '.join(options)}" if options else ""
+
+    if is_free_text:
+        system_msg = (
+            "You are a speech-to-text cleanup assistant for form filling. "
+            "The user spoke their answer out loud and it was transcribed. "
+            "Your job is to clean it up — remove filler words (um, uh, like, you know, so), "
+            "fix capitalisation (names → Title Case, sentences → Sentence case), "
+            "remove trailing punctuation artifacts, and strip any repeated words from transcription errors. "
+            "Return ONLY a JSON object with exactly these keys (no extra text):\n"
+            '  "valid": true  (always true for this field type)\n'
+            '  "formatted_answer": the cleaned-up answer\n'
+            '  "feedback": ""\n\n'
+            "Examples:\n"
+            '  "um john smith" → "John Smith"\n'
+            '  "uh fourteen ninety five uh broadway" → "1495 Broadway"\n'
+            '  "yes yes" → "Yes"\n'
+            '  "new york new york" → "New York"'
+        )
+        user_content = f"Field type: {field_type}\nUser answered: {answer}"
+    else:
+        system_msg = (
+            "You are a form assistant. A user spoke an answer to a form field. "
+            "Clean up any speech artifacts (filler words, repetitions) and normalise the format. "
+            "Return ONLY a JSON object with exactly these keys (no extra text):\n"
+            '  "valid": true unless the answer is clearly the wrong format '
+            "(e.g. saying 'hello' for a phone number, or 'yes' for a date)\n"
+            '  "formatted_answer": the answer normalised for the field type '
+            "(dates → MM/DD/YYYY, phones → (XXX) XXX-XXXX, SSN → XXX-XX-XXXX, "
+            "yes_no → Yes or No, numbers → digits only, choice → closest matching option, "
+            "names → Title Case, remove filler words like um/uh)\n"
+            '  "feedback": if invalid, ONE short friendly sentence saying what format is needed; '
+            "if valid, empty string\n\n"
+            "IMPORTANT: be very lenient. When in doubt mark valid=true. "
+            "Never reject an answer just because it sounds informal or spoken."
+        )
+        user_content = (
+            f"Field type: {field_type}{options_hint}\n" f"User answered: {answer}"
+        )
+
+    response = await chat(
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_content},
+        ],
+        max_tokens=200,
+        temperature=0.1,
+    )
+
+    raw = extract_content(response)
+    if isinstance(raw, list):
+        raw = " ".join(
+            p.get("text", "") if isinstance(p, dict) else str(p) for p in raw
+        )
+
+    try:
+        cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+        # extract first JSON object if surrounded by prose
+        m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if m:
+            cleaned = m.group()
+        data = json.loads(cleaned)
+        return {
+            "valid": bool(data.get("valid", True)),
+            "formatted_answer": str(data.get("formatted_answer", answer)),
+            "feedback": str(data.get("feedback", "")),
+        }
+    except Exception as exc:
+        logger.warning(f"verify_answer parse failed ({exc}) — treating as valid")
+        return {"valid": True, "formatted_answer": answer, "feedback": ""}
+
+    return questions

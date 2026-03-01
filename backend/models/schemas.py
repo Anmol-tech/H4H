@@ -166,6 +166,23 @@ class AnalyzePdfRequest(BaseModel):
     )
 
 
+class VerifyAnswerRequest(BaseModel):
+    """Verify and format a user's spoken answer against the question."""
+
+    question: str
+    field_type: str
+    answer: str
+    options: list[str] | None = None
+
+
+class VerifyAnswerResponse(BaseModel):
+    """Result of LLM answer verification."""
+
+    valid: bool
+    formatted_answer: str
+    feedback: str  # empty string when valid
+
+
 class AnalyzePdfResponse(BaseModel):
     """Structured result of the VLM form analysis."""
 
