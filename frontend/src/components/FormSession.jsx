@@ -336,7 +336,7 @@ export default function FormSession({ pdfUrl, fileName, liveAnswers, analyzedQue
                                 );
                             })}
                         </div>
-                    </div>)
+                    </div>
 
                     {/* Collapsible PDF preview */}
                     {pdfUrl && (
