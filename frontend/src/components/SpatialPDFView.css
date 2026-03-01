@@ -1,0 +1,262 @@
+/* filepath: frontend/src/components/SpatialPDFView.css */
+
+.spatial-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(42,120,134,0.15) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 20%, rgba(58,154,170,0.1) 0%, transparent 50%),
+    linear-gradient(135deg, #040d18, #0f172a, #1a2540);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem 1rem 4rem;
+  gap: 2rem;
+  perspective: 1200px;
+  overflow: hidden;
+}
+
+/* Floating particles background */
+.spatial-page::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.15) 0%, transparent 100%),
+    radial-gradient(1px 1px at 60% 70%, rgba(255,255,255,0.1) 0%, transparent 100%),
+    radial-gradient(1px 1px at 80% 20%, rgba(56,189,248,0.2) 0%, transparent 100%),
+    radial-gradient(1px 1px at 40% 80%, rgba(255,255,255,0.08) 0%, transparent 100%);
+  pointer-events: none;
+}
+
+.spatial-header {
+  text-align: center;
+  color: white;
+  position: relative;
+  z-index: 1;
+}
+
+.spatial-title {
+  font-size: 2.5rem;
+  font-weight: 800;
+  color: #38bdf8;
+  margin: 0;
+  letter-spacing: -0.03em;
+  text-shadow: 0 0 40px rgba(56,189,248,0.5);
+}
+
+.spatial-subtitle {
+  font-size: 1rem;
+  color: rgba(255,255,255,0.6);
+  margin: 0.25rem 0 0;
+}
+
+.spatial-hint {
+  font-size: 0.8rem;
+  color: rgba(255,255,255,0.4);
+  margin-top: 0.5rem;
+  background: rgba(255,255,255,0.05);
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+/* ── Main Form Card ── */
+.spatial-form-card {
+  background: rgba(255,255,255,0.97);
+  border-radius: 20px;
+  padding: 2rem;
+  width: 100%;
+  max-width: 560px;
+  position: relative;
+  z-index: 1;
+
+  /* 3D depth effect */
+  transform: perspective(1200px) rotateX(6deg) rotateY(-4deg) translateZ(0px);
+  transform-style: preserve-3d;
+  box-shadow:
+    0 2px 0px 0 rgba(255,255,255,0.1),
+    0 10px 40px rgba(0,0,0,0.5),
+    0 40px 80px rgba(0,0,0,0.4),
+    20px 20px 60px rgba(0,0,0,0.3),
+    inset 0 1px 0 rgba(255,255,255,0.8);
+
+  /* No CSS transition on transform — pointer handler manages it to avoid lag */
+  /* fill-mode is NOT 'forwards' so the animation doesn't block JS inline style after finishing */
+  animation: card-float-in 0.8s cubic-bezier(0.23, 1, 0.32, 1);
+  animation-fill-mode: none;
+
+  /* Simulate thickness */
+  border-left: 1px solid rgba(255,255,255,0.3);
+  border-top: 1px solid rgba(255,255,255,0.4);
+}
+
+/* :hover intentionally not overriding transform — pointer tracking handles it */
+
+@keyframes card-float-in {
+  0% {
+    opacity: 0;
+    transform: perspective(1200px) rotateX(20deg) rotateY(-10deg) translateZ(-100px);
+  }
+  100% {
+    opacity: 1;
+    transform: perspective(1200px) rotateX(6deg) rotateY(-4deg) translateZ(0px);
+  }
+}
+
+/* ── Form Header ── */
+.spatial-form-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid #2a7886;
+}
+
+.spatial-agency-badge {
+  width: 48px;
+  height: 48px;
+  background: #2a7886;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: 800;
+  font-size: 0.75rem;
+}
+
+.spatial-form-header h2 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #1a1f2b;
+  margin: 0;
+}
+
+.spatial-form-header p {
+  font-size: 0.75rem;
+  color: #6b7685;
+  margin: 0;
+}
+
+/* ── Fields ── */
+.spatial-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 1.5rem;
+}
+
+.spatial-field {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 0.875rem;
+  border: 1.5px solid #dce1e8;
+  border-radius: 10px;
+  transition: all 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+  background: white;
+  transform: translateZ(0px) translateX(0px);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+
+.spatial-field:hover {
+  transform: translateZ(8px) translateX(4px);
+  box-shadow: -4px 4px 12px rgba(0,0,0,0.12);
+  border-color: #b0b8c4;
+}
+
+.spatial-field.active {
+  border-color: #2a7886;
+  background: #e8f4f6;
+  box-shadow:
+    -6px 6px 20px rgba(42,120,134,0.25),
+    0 0 0 3px rgba(42,120,134,0.1);
+  transform: translateZ(16px) translateX(8px);
+}
+
+.spatial-field.filled {
+  border-color: #27ae60;
+  background: #f0fdf4;
+  box-shadow: -3px 3px 10px rgba(39,174,96,0.15);
+  transform: translateZ(4px) translateX(2px);
+}
+
+.spatial-field-number {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #eef1f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #6b7685;
+  flex-shrink: 0;
+}
+
+.spatial-field.active .spatial-field-number {
+  background: #2a7886;
+  color: white;
+}
+
+.spatial-field.filled .spatial-field-number {
+  background: #27ae60;
+  color: white;
+}
+
+.spatial-field-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.spatial-field-label {
+  font-size: 0.8rem;
+  color: #6b7685;
+}
+
+.spatial-field-value {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #1a1f2b;
+}
+
+.spatial-field-active-badge {
+  font-size: 0.7rem;
+  color: #2a7886;
+  font-weight: 600;
+}
+
+.spatial-field-status {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.spatial-field-status.done { color: #27ae60; }
+.spatial-field-status.now  { color: #2a7886; }
+.spatial-field-status.empty { color: #b0b8c4; }
+
+/* ── Progress ── */
+.spatial-progress-bar {
+  height: 6px;
+  background: #eef1f5;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.spatial-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2a7886, #3a9aaa);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.spatial-progress-label {
+  font-size: 0.75rem;
+  color: #6b7685;
+  text-align: center;
+  margin: 0.5rem 0 0;
+}

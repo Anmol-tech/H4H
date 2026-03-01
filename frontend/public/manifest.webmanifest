@@ -1,0 +1,14 @@
+{
+  "name": "FormWhisper",
+  "short_name": "FormWhisper",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#2a7886",
+  "xr_main_scene": {
+    "default_size": {
+      "width": 800,
+      "height": 1000
+    }
+  }
+}

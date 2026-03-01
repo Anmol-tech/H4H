@@ -25,7 +25,7 @@ from services.utils.pdf_to_images import pdf_to_images
 logger = logging.getLogger(__name__)
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://165.245.130.21:30000")
-LLM_MODEL = os.getenv("LLM_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct")
+LLM_MODEL = os.getenv("LLM_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct")
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "3000"))
 
 

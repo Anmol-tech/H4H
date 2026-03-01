@@ -212,3 +212,38 @@ a {
 .animate-fade-in {
   animation: fade-in 0.5s ease forwards;
 }
+
+/* ── WebSpatial / XR Mode ── */
+html.is-spatial {
+  background-color: transparent;
+  --xr-background-material: transparent;
+
+  .spatial-form-card {
+    --xr-background-material: thick;
+    position: relative;
+    border-radius: 20px;
+  }
+
+  .spatial-form-card .pdf-field {
+    --xr-background-material: translucent;
+    position: relative;
+    --xr-back: 30;
+  }
+
+  .spatial-form-card .pdf-field.active {
+    --xr-back: 60;
+    transform: translateZ(40px);
+  }
+
+  .spatial-form-card .pdf-field.filled {
+    --xr-back: 20;
+  }
+
+  .spatial-voice-panel {
+    --xr-background-material: translucent;
+    position: relative;
+    --xr-back: 50;
+    transform-origin: top left;
+    transform: translateZ(30px) rotateY(-15deg);
+  }
+}

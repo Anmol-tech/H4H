@@ -3,12 +3,13 @@ import Header from './components/Header';
 import HomePage from './components/HomePage';
 import FormSession from './components/FormSession';
 import Sponsors from './components/Sponsors';
+import SpatialPDFView from './components/SpatialPDFView';
 import './App.css';
 
 function App() {
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
-  const [view, setView] = useState('home'); // home | session
+  const [view, setView] = useState('home'); // home | session | spatial
   const [uploadedPdf, setUploadedPdf] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
@@ -97,6 +98,10 @@ function App() {
     });
   };
 
+  const handleToggleSpatial = () => {
+    setView((v) => (v === 'spatial' ? 'home' : 'spatial'));
+  };
+
   const getSessionName = () => {
     if (uploadedPdf?.name) return uploadedPdf.name;
     return 'Form Session';
@@ -109,7 +114,29 @@ function App() {
         onLogoClick={handleLogoClick}
       />
 
-      {view === 'home' ? (
+      {/* 3D View toggle button */}
+      <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 999 }}>
+        <button
+          onClick={handleToggleSpatial}
+          style={{
+            padding: '12px 20px',
+            background: view === 'spatial' ? '#1a5c68' : '#2a7886',
+            color: 'white',
+            border: 'none',
+            borderRadius: '999px',
+            cursor: 'pointer',
+            fontWeight: '700',
+            fontSize: '14px',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+          }}
+        >
+          {view === 'spatial' ? '← Back' : '✦ 3D View'}
+        </button>
+      </div>
+
+      {view === 'spatial' ? (
+        <SpatialPDFView />
+      ) : view === 'home' ? (
         <>
           <HomePage
             onUploadPdf={handlePdfUpload}
