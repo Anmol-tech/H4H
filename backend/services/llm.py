@@ -122,9 +122,60 @@ def build_multi_image_message(
 
 # ── High-level PDF analysis pipeline ────────────────────
 
+# ── Patterns that indicate a non-fillable statement (used for post-filtering) ──
+_NON_FIELD_PATTERNS: list[re.Pattern] = [
+    re.compile(r"\bI\s+(authorize|certify|agree|acknowledge|understand|consent|attest|swear|affirm|declare|verify)\b", re.I),
+    re.compile(r"\b(penalty|penalties)\s+of\s+(perjury|law)\b", re.I),
+    re.compile(r"\bprivacy\s+act\b", re.I),
+    re.compile(r"\bpaperwork\s+(reduction|burden)\b", re.I),
+    re.compile(r"\bOMB\s+(control|no|number|#)", re.I),
+    re.compile(r"\bfor\s+official\s+use\s+only\b", re.I),
+    re.compile(r"\bfor\s+office\s+use\s+only\b", re.I),
+    re.compile(r"\brelease\s+information\s+to\b", re.I),
+    re.compile(r"\bhereby\s+(authorize|certify|consent|affirm|declare)\b", re.I),
+    re.compile(r"\bknowingly\s+(false|fraudulent)\b", re.I),
+    re.compile(r"\bsubject\s+to\s+(criminal|civil)\b", re.I),
+    re.compile(r"\bin\s+accordance\s+with\b", re.I),
+    re.compile(r"\bpursuant\s+to\b", re.I),
+    re.compile(r"\bsignature\b", re.I),
+    re.compile(r"\bdate\s*signed\b", re.I),
+    # Declaration / release sections
+    re.compile(r"\bdeclaration\s+and\s+release\b", re.I),
+    re.compile(r"\bby\s+my\s+signature\b", re.I),
+    re.compile(r"\bread\s+the\s+form\s+carefully\b", re.I),
+    re.compile(r"\bconsult\s+with\s+an\s+attorney\b", re.I),
+    # For-office-use fields (inspector/FEMA staff fill these, not the applicant)
+    re.compile(r"\binspector\s*(id|#|number)\b", re.I),
+    re.compile(r"\bfema\s+application\s*(#|number)\b", re.I),
+    re.compile(r"\bdisaster\s*(#|number)\b", re.I),
+    re.compile(r"\bapplication\s*(#|number|no)\b", re.I),
+]
+
+
+def _is_non_fillable(field: dict) -> bool:
+    """Return True if a parsed field looks like a legal statement, not a real input."""
+    text = f"{field.get('label', '')} {field.get('prompt', '')} {field.get('field_name', '')}"
+    for pat in _NON_FIELD_PATTERNS:
+        if pat.search(text):
+            return True
+    return False
+
+
 FORM_ANALYSIS_PROMPT = (
     "You are a warm, friendly form-filling assistant helping everyday people complete government forms by voice. "
     "You will receive one or more images of pages from a PDF form.\n\n"
+    "⚠️  MOST IMPORTANT RULE — READ THIS FIRST:\n"
+    "A FILLABLE FIELD is ONLY something with a BLANK space, line, box, or checkbox where the applicant must write/type/select.\n"
+    "A STATEMENT the applicant merely reads or agrees to is NOT a field.\n"
+    "Examples of things that are NOT fields (NEVER include these):\n"
+    '  × "I authorize FEMA to verify all information..."\n'
+    '  × "I authorize all custodians of records of my insurance..."\n'
+    '  × "I certify that the above information is true..."\n'
+    '  × "Penalty for false statements..."\n'
+    '  × "Privacy Act Statement..."\n'
+    '  × Any sentence that starts with "I authorize", "I certify", "I agree", "I understand", "I acknowledge"\n'
+    "If you are unsure whether something is a fillable field, ask yourself: \"Is there a blank for the person to write in?\"\n"
+    "If the answer is no, DO NOT include it.\n\n"
     "CRITICAL INSTRUCTIONS - READ CAREFULLY:\n"
     "1. SCAN EVERY SINGLE PAGE COMPLETELY:\n"
     "   - Read from top to bottom, left to right\n"
@@ -132,22 +183,30 @@ FORM_ANALYSIS_PROMPT = (
     "   - Look in margins, boxes, and nested sections\n"
     "   - Do NOT skip any pages\n"
     "   - Do NOT stop early - continue until the last field on the last page\n"
-    "2. IDENTIFY ALL VOICE-FILLABLE FIELDS (typically 20-50+ fields per form):\n"
-    "   - Text inputs: names, titles, descriptions, addresses, cities, states, zip codes\n"
+    "2. IDENTIFY ONLY ACTUAL FILLABLE FIELDS — fields where a person must write, type, or select something:\n"
+    "   - Text inputs (blank lines or boxes): names, titles, descriptions, addresses, cities, states, zip codes\n"
     "   - Date fields: birth dates, event dates, application dates\n"
     "   - Number fields: phone numbers, SSN, amounts, quantities, percentages\n"
     "   - Email addresses\n"
-    "   - Yes/No questions and boolean fields\n"
-    "   - Checkboxes (all checkboxes - convert to yes/no or multiple choice)\n"
+    "   - Yes/No questions that have a blank checkbox or radio button to mark\n"
+    "   - Checkboxes (convert to yes/no or multiple choice)\n"
     "   - Radio buttons (convert to single-choice questions with all options)\n"
     "   - Dropdown/selection fields (list all available options)\n"
-    "   - Text areas and comment boxes\n"
-    "3. EXCLUDE ONLY these non-voice fields:\n"
-    "   - Physical signature lines\n"
+    "   - Text areas and comment boxes with blank space to write in\n"
+    "   KEY TEST: If there is no blank line, box, checkbox, or input area next to/under the text, it is NOT a fillable field.\n"
+    "3. EXCLUDE all of the following — these are NOT fillable fields:\n"
+    "   - Authorization / consent / certification statements (e.g., 'I authorize FEMA to verify...', 'I certify that...')\n"
+    "   - Legal disclaimers, penalty warnings, and privacy act notices\n"
+    "   - Instructions, directions, and informational paragraphs\n"
+    "   - Section titles, headers, sub-headers, and labels that are just describing a section\n"
+    "   - Pre-printed text that the applicant does NOT fill in\n"
+    "   - Paragraphs the applicant only reads and acknowledges by signing (the signature itself is excluded too)\n"
+    "   - Physical signature lines and date-of-signature lines\n"
     "   - Drawing/sketch areas\n"
     "   - Barcodes or QR codes\n"
-    "   - Pre-filled form numbers or office use only fields\n"
+    "   - Pre-filled form numbers, OMB numbers, or 'For Office Use Only' fields\n"
     "   - File upload buttons\n"
+    "   REMEMBER: If the form text is a statement the applicant is agreeing to (not filling in), SKIP IT.\n"
     "4. For checkboxes and selection fields:\n"
     "   - Single checkbox (yes/no): use type 'yes_no'\n"
     "   - Multiple independent checkboxes (select all that apply): use type 'checkbox' with all options listed\n"
@@ -164,30 +223,22 @@ FORM_ANALYSIS_PROMPT = (
     "   - Keep questions SHORT and clear — one sentence ideally\n"
     "6. COMPLETENESS CHECK:\n"
     "   - Count fields as you go\n"
-    "   - Most government/medical forms have 25-60+ fillable fields\n"
-    "   - If you find fewer than 15 fields, you probably missed some - scan again\n"
-    "   - Continue until you've processed every visible field on every page\n\n"
+    "   - Only count genuine fillable fields — do NOT pad with non-fillable content\n"
+    "   - If a piece of text has no blank to fill, no checkbox to check, no option to select — it is NOT a field\n"
+    "   - Quality over quantity: 15 real fields is better than 40 fields with junk\n"
+    "   - Continue until you've processed every visible FILLABLE field on every page\n\n"
     "OUTPUT FORMAT - Return ONLY a valid JSON array. Each element must have:\n"
     '   - "field_name": descriptive snake_case identifier (e.g., "applicant_first_name", "mailing_street_address")\n'
     '   - "label": exact label text from the form (e.g., "First Name", "Street Address")\n'
     '   - "type": one of: text, date, ssn, phone, address, yes_no, number, email, checkbox, choice\n'
     '   - "prompt": conversational question as a friendly assistant would say it out loud\n'
     '   - "options": (REQUIRED for checkbox/choice types) array of all available options\n\n'
-    "CONVERSATIONAL PROMPT EXAMPLES — use this tone:\n"
+    "OUTPUT FORMAT EXAMPLES (structure only — DO NOT include these in your output):\n"
     "[\n"
-    '  {"field_name":"applicant_first_name","label":"First Name","type":"text","prompt":"What\'s your first name?"},\n'
-    '  {"field_name":"applicant_last_name","label":"Last Name","type":"text","prompt":"And your last name?"},\n'
-    '  {"field_name":"date_of_birth","label":"Date of Birth","type":"date","prompt":"What\'s your date of birth?"},\n'
-    '  {"field_name":"mailing_street","label":"Street Address","type":"text","prompt":"What\'s your current street address?"},\n'
-    '  {"field_name":"mailing_city","label":"City","type":"text","prompt":"What city do you live in?"},\n'
-    '  {"field_name":"mailing_state","label":"State","type":"text","prompt":"What state is that in?"},\n'
-    '  {"field_name":"mailing_zip","label":"ZIP Code","type":"number","prompt":"What\'s your ZIP code?"},\n'
-    '  {"field_name":"phone_number","label":"Phone Number","type":"phone","prompt":"What\'s the best phone number to reach you?"},\n'
-    '  {"field_name":"ssn","label":"Social Security Number","type":"ssn","prompt":"Can you share your Social Security Number? Don\'t worry — it\'s kept completely private."},\n'
-    '  {"field_name":"has_insurance","label":"Do you have insurance?","type":"yes_no","prompt":"Do you have any insurance coverage for the damaged property?"},\n'
-    '  {"field_name":"disaster_type","label":"Type of Disaster","type":"choice","prompt":"What type of disaster affected you?","options":["Hurricane","Flood","Fire","Earthquake","Tornado","Other"]},\n'
-    '  {"field_name":"assistance_needed","label":"Type of assistance needed","type":"checkbox","prompt":"What kinds of help are you looking for? You can mention as many as apply.","options":["Housing","Food","Medical","Transportation","Childcare"]}\n'
-    "]\n\n"
+    '  {"field_name":"<snake_case>","label":"<exact form label>","type":"text","prompt":"<friendly spoken question>"},\n'
+    '  {"field_name":"<snake_case>","label":"<exact form label>","type":"choice","prompt":"<question>","options":["Option A","Option B","Option C"]}\n'
+    "]\n"
+    "WARNING: The placeholders above show structure only. Every field you output MUST come from the actual form images.\n\n"
     "IMPORTANT: Return ONLY the complete JSON array with ALL voice-fillable fields from ALL pages.\n"
     "Do NOT stop prematurely. Do NOT add markdown fences. Do NOT add explanations.\n"
     "The JSON array should contain EVERY fillable field you found.\n"
@@ -247,9 +298,12 @@ async def analyze_pdf_form(
                     "You are a warm, friendly voice assistant helping people fill out government forms. "
                     "Your job is to extract EVERY fillable field from the form images and turn each one into "
                     "a natural, conversational question — the kind a helpful human would ask out loud. "
-                    "Be thorough: scan every page completely, do not skip fields, do not stop early. "
+                    "ONLY include fields that have a blank space, line, box, or checkbox for the person to fill in. "
+                    "NEVER include authorization statements, legal disclaimers, consent paragraphs, or any "
+                    "text that starts with 'I authorize', 'I certify', 'I agree', etc. — those are NOT fields. "
+                    "Also exclude signature lines and date-signed lines. "
                     "Use contractions, empathetic phrasing, and plain language. Avoid bureaucratic wording. "
-                    "Return ONLY a complete JSON array with ALL fields found."
+                    "Return ONLY a complete JSON array with ALL genuinely fillable fields found."
                 ),
             },
             user_msg,
@@ -274,7 +328,7 @@ async def analyze_pdf_form(
         f"PDF form analysis complete: {len(pages)} pages analyzed, "
         f"{usage.get('total_tokens', 0)} tokens used"
     )
-    logger.debug(f"Raw VLM output (first 500 chars): {str(raw_content)[:500]}")
+    logger.info(f"Raw VLM output (FULL):\n{raw_content}")
 
     # 4. Parse the JSON from the LLM output
     questions = _parse_questions_json(raw_content)
@@ -282,16 +336,6 @@ async def analyze_pdf_form(
     logger.info(f"Successfully parsed {len(questions)} questions from VLM output")
     if len(questions) == 0:
         logger.warning("No questions were extracted! Check raw_content for issues.")
-    elif len(questions) < 10:
-        logger.warning(
-            f"Only {len(questions)} fields extracted - this seems low for a {len(pages)}-page form. "
-            "The model may have missed fields or stopped early."
-        )
-    elif len(questions) < 15 and len(pages) > 1:
-        logger.warning(
-            f"Only {len(questions)} fields for {len(pages)} pages - may be incomplete. "
-            "Review raw_content to verify all fields were captured."
-        )
 
     return {
         "questions": questions,
@@ -340,20 +384,32 @@ def _parse_questions_json(raw: str) -> list[dict[str, Any]]:
         logger.warning(f"Parsed data is not a list, got: {type(data)}")
         return []
 
-    # Normalise and assign sequential IDs
+    # Normalise, filter, and assign sequential IDs
     questions: list[dict[str, Any]] = []
-    for idx, item in enumerate(data, start=1):
+    filtered_count = 0
+    seq = 0
+    for raw_idx, item in enumerate(data, start=1):
         if not isinstance(item, dict):
-            logger.warning(f"Item {idx} is not a dict, skipping")
+            logger.warning(f"Item {raw_idx} is not a dict, skipping")
             continue
 
         # Validate required fields
         if not item.get("field_name") or not item.get("prompt"):
-            logger.warning(f"Item {idx} missing required fields, using defaults")
+            logger.warning(f"Item {raw_idx} missing required fields, using defaults")
 
+        # Post-processing filter: drop authorization / legal / consent statements
+        if _is_non_fillable(item):
+            logger.info(
+                f"Filtered out non-fillable field: {item.get('field_name', '?')} "
+                f"(label: {item.get('label', '?')!r})"
+            )
+            filtered_count += 1
+            continue
+
+        seq += 1
         question = {
-            "id": idx,
-            "field_name": item.get("field_name", f"field_{idx}"),
+            "id": seq,
+            "field_name": item.get("field_name", f"field_{seq}"),
             "label": item.get("label", ""),
             "type": item.get("type", "text"),
             "prompt": item.get("prompt", item.get("label", "")),
@@ -365,4 +421,32 @@ def _parse_questions_json(raw: str) -> list[dict[str, Any]]:
 
         questions.append(question)
 
-    return questions
+    if filtered_count:
+        logger.info(f"Post-filter removed {filtered_count} non-fillable items from LLM output")
+
+    # Deduplicate by field_name — if two entries share a field_name but have
+    # different labels, keep both and suffix the later one to make it unique.
+    seen_fields: dict[str, int] = {}  # field_name -> count seen so far
+    deduped: list[dict[str, Any]] = []
+    for q in questions:
+        fn = q["field_name"]
+        if fn in seen_fields:
+            prev = next((x for x in deduped if x["field_name"] == fn), None)
+            if prev and prev.get("label") == q.get("label"):
+                # Exact duplicate — drop silently
+                logger.info(f"Deduped exact duplicate field_name: {fn!r}")
+                continue
+            # Different label — make the field_name unique by appending a counter
+            seen_fields[fn] += 1
+            q = dict(q)  # don't mutate the original
+            q["field_name"] = f"{fn}_{seen_fields[fn]}"
+            logger.info(f"Renamed duplicate field_name {fn!r} -> {q['field_name']!r}")
+        else:
+            seen_fields[fn] = 1
+        deduped.append(q)
+
+    # Re-number sequentially after filtering + dedup
+    for i, q in enumerate(deduped, start=1):
+        q["id"] = i
+
+    return deduped
