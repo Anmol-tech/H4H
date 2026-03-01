@@ -13,6 +13,9 @@ function App() {
   const [uploadedPdf, setUploadedPdf] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState('');
+  const [analyzedQuestions, setAnalyzedQuestions] = useState(null);
 
   useEffect(() => {
     return () => {
@@ -30,8 +33,11 @@ function App() {
 
     setIsUploading(true);
     setUploadError('');
+    setAnalyzeError('');
+    setAnalyzedQuestions(null);
 
     try {
+      // 1. Upload the PDF
       const formData = new FormData();
       formData.append('file', file);
 
@@ -47,18 +53,43 @@ function App() {
 
       const data = await response.json();
       const url = data.url?.startsWith('http') ? data.url : `${API_BASE}${data.url}`;
+      const fileId = data.file_id;
 
       setUploadedPdf({
         name: data.original_filename || file.name,
         url,
+        fileId,
       });
 
       setActiveTemplate(null);
       setView('session');
+      setIsUploading(false);
+
+      // 2. Analyze the form with VLM
+      setIsAnalyzing(true);
+      try {
+        const analyzeResp = await fetch(`${API_BASE}/llm/analyze-pdf`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ file_id: fileId }),
+        });
+
+        if (!analyzeResp.ok) {
+          const errText = await analyzeResp.text();
+          throw new Error(errText || 'Form analysis failed');
+        }
+
+        const analyzeData = await analyzeResp.json();
+        setAnalyzedQuestions(analyzeData.questions);
+      } catch (err) {
+        console.error('Analyze error:', err);
+        setAnalyzeError('Could not analyze the form. Using default questions.');
+      } finally {
+        setIsAnalyzing(false);
+      }
     } catch (err) {
       console.error(err);
       setUploadError('Upload failed. Please try again.');
-    } finally {
       setIsUploading(false);
     }
   };
@@ -66,6 +97,8 @@ function App() {
   const handleLogoClick = () => {
     setView('home');
     setActiveTemplate(null);
+    setAnalyzedQuestions(null);
+    setAnalyzeError('');
     setUploadedPdf((prev) => {
       if (prev?.url?.startsWith('blob:')) URL.revokeObjectURL(prev.url);
       return null;
@@ -98,7 +131,13 @@ function App() {
           <Sponsors />
         </>
       ) : (
-        <FormSession pdfUrl={uploadedPdf?.url} fileName={uploadedPdf?.name} />
+        <FormSession
+          pdfUrl={uploadedPdf?.url}
+          fileName={uploadedPdf?.name}
+          analyzedQuestions={analyzedQuestions}
+          isAnalyzing={isAnalyzing}
+          analyzeError={analyzeError}
+        />
       )}
     </>
   );

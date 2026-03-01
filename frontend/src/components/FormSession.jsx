@@ -14,7 +14,7 @@ const MOCK_ANSWERS = {
     has_insurance: 'No',
 };
 
-export default function FormSession({ pdfUrl, fileName, liveAnswers }) {
+export default function FormSession({ pdfUrl, fileName, liveAnswers, analyzedQuestions, isAnalyzing, analyzeError }) {
     const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
     const [currentIndex, setCurrentIndex] = useState(0);
     const [answers, setAnswers] = useState({});
@@ -26,10 +26,27 @@ export default function FormSession({ pdfUrl, fileName, liveAnswers }) {
     const mediaRecorderRef = useRef(null);
     const chunksRef = useRef([]);
 
-    const questions = femaForm.questions;
+    // Use VLM-analyzed questions when available, fallback to mock FEMA template
+    const questions = analyzedQuestions && analyzedQuestions.length > 0
+        ? analyzedQuestions.map((q) => ({
+            id: q.id,
+            label: q.prompt || q.label,
+            fieldName: q.field_name,
+            type: q.type,
+            options: q.options || null, // for checkbox/choice fields
+        }))
+        : femaForm.questions;
+
     const current = questions[currentIndex];
     const totalQuestions = questions.length;
     const progress = ((Object.keys(answers).length) / totalQuestions) * 100;
+
+    // Reset when questions change (new analysis result)
+    useEffect(() => {
+        setCurrentIndex(0);
+        setAnswers({});
+        setPhase('asking');
+    }, [analyzedQuestions]);
 
     // Merge live answers coming from backend in real time
     useEffect(() => {
@@ -167,7 +184,26 @@ export default function FormSession({ pdfUrl, fileName, liveAnswers }) {
 
             {/* Right: Voice Panel */}
             <div className="voice-panel">
-                {phase === 'complete' ? (
+                {analyzedQuestions && analyzedQuestions.length > 0 && phase === 'asking' && currentIndex === 0 && (
+                    <div className="analysis-success-banner">
+                        ✓ Found {analyzedQuestions.length} fields in your form
+                    </div>
+                )}
+                {isAnalyzing ? (
+                    <div className="voice-analyzing">
+                        <div className="analyzing-spinner"></div>
+                        <h2 className="analyzing-title">Analyzing your form...</h2>
+                        <p className="analyzing-subtitle">
+                            Our AI is reading each page and creating simple questions for you.
+                        </p>
+                    </div>
+                ) : analyzeError && (!analyzedQuestions || analyzedQuestions.length === 0) ? (
+                    <div className="voice-analyzing">
+                        <h2 className="analyzing-title">⚠️ Analysis Issue</h2>
+                        <p className="analyzing-subtitle">{analyzeError}</p>
+                        <p className="analyzing-subtitle">Using default form questions instead.</p>
+                    </div>
+                ) : phase === 'complete' ? (
                     <div className="voice-complete">
                         <div className="complete-icon">
                             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
@@ -212,6 +248,19 @@ export default function FormSession({ pdfUrl, fileName, liveAnswers }) {
                         </span>
 
                         <h2 className="voice-question-text">{current.label}</h2>
+
+                        {current.options && current.options.length > 0 && (
+                            <div className="voice-options">
+                                <p className="voice-options-label">
+                                    {current.type === 'checkbox' ? 'Select all that apply:' : 'Choose one:'}
+                                </p>
+                                <ul className="voice-options-list">
+                                    {current.options.map((opt, idx) => (
+                                        <li key={idx}>{opt}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
 
                         <p className="voice-instruction">
                             {isListening ? 'Listening...' : 'Speak your answer now'}

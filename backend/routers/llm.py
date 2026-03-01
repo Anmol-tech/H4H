@@ -1,13 +1,22 @@
 """LLM router — exposes the Qwen VL chat-completion endpoint to the frontend."""
 
-from fastapi import APIRouter
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, status
 from models.schemas import (
     LLMChatRequest,
     LLMChatResponse,
     AnalyzeFormRequest,
     AnalyzeFormResponse,
+    AnalyzePdfRequest,
+    AnalyzePdfResponse,
+    FormQuestion,
 )
-from services.llm import chat, extract_content, build_image_message
+from services.llm import chat, extract_content, build_image_message, analyze_pdf_form
+
+# Upload directory (same as routers/upload.py)
+BASE_DIR = Path(__file__).resolve().parent.parent
+UPLOAD_DIR = BASE_DIR / "data" / "uploads"
 
 router = APIRouter(prefix="/llm", tags=["llm"])
 
@@ -85,4 +94,41 @@ async def analyze_form(body: AnalyzeFormRequest):
         prompt_tokens=usage.get("prompt_tokens", 0),
         completion_tokens=usage.get("completion_tokens", 0),
         total_tokens=usage.get("total_tokens", 0),
+    )
+
+
+@router.post("/analyze-pdf", response_model=AnalyzePdfResponse)
+async def analyze_pdf(body: AnalyzePdfRequest):
+    """
+    Full pipeline: uploaded PDF → page images → VLM → structured questions.
+
+    Steps:
+      1. Look up the PDF by file_id in the uploads directory.
+      2. Convert each page to a PNG image.
+      3. Send all page images to the Qwen VL model.
+      4. Parse the model output into a structured list of form questions.
+    """
+    pdf_path = UPLOAD_DIR / f"{body.file_id}.pdf"
+    if not pdf_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"PDF with file_id '{body.file_id}' not found",
+        )
+
+    result = await analyze_pdf_form(
+        pdf_path=pdf_path,
+        max_tokens=body.max_tokens,
+    )
+
+    questions = [FormQuestion(**q) for q in result["questions"]]
+
+    return AnalyzePdfResponse(
+        file_id=body.file_id,
+        questions=questions,
+        raw_content=result["raw_content"],
+        pages_analyzed=result["pages_analyzed"],
+        model=result["model"],
+        prompt_tokens=result["prompt_tokens"],
+        completion_tokens=result["completion_tokens"],
+        total_tokens=result["total_tokens"],
     )
