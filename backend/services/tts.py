@@ -86,7 +86,7 @@ async def synthesize(text: str, voice_id: str | None = None) -> str:
                 resp = await client.post(url, headers=headers, json=payload)
 
             if resp.status_code == 429:
-                wait = 2 ** attempt  # 1s, 2s, 4s
+                wait = 2**attempt  # 1s, 2s, 4s
                 log.warning(
                     "ElevenLabs 429 (concurrent limit) on attempt %d/%d — "
                     "retrying in %ds",
