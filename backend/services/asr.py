@@ -1,39 +1,83 @@
 """
-ASR (Automatic Speech Recognition) service — STUB.
-Replace with real ASR (Whisper, Deepgram, etc.) when ready.
+ASR (Automatic Speech Recognition) service — Whisper-based.
+Sends audio to a self-hosted vLLM Whisper endpoint for transcription.
+Uses ffmpeg to convert any browser audio format to WAV before sending.
 """
 
-from data.fema_template import get_field
+import logging
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 
-# Mock answers keyed by field_name for demo purposes
-_MOCK_TRANSCRIPTS: dict[str, str] = {
-    "applicant_name": "Sid Johnson",
-    "date_of_birth": "March 15, 1990",
-    "ssn": "123-45-6789",
-    "mailing_address": "1234 Oak Street, Austin, TX 78701",
-    "phone_number": "(512) 555-0147",
-    "disaster_type": "Hurricane",
-    "damaged_property_address": "1234 Oak Street, Austin, TX 78701",
-    "has_insurance": "No",
-}
+import httpx
+
+log = logging.getLogger(__name__)
+
+# Whisper model endpoint (same host as LLM, port 8000)
+WHISPER_BASE_URL = "http://165.245.130.21:8000"
+WHISPER_MODEL = "openai/whisper-large-v3"
+WHISPER_TIMEOUT = 300  # seconds — transcription can be slow for long audio
+
+# Locate ffmpeg — try PATH first, fall back to known winget install location
+_FFMPEG = shutil.which("ffmpeg") or r"C:\Users\siddh\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.0.1-full_build\bin\ffmpeg.exe"
 
 
-async def transcribe(audio_bytes: bytes, template_id: str, field_index: int) -> dict:
-    """
-    STUB: Pretend to transcribe audio.
-    Returns a mock transcript based on the field being answered.
+def _convert_to_wav(audio_bytes: bytes, input_filename: str) -> bytes:
+    """Convert any audio format to 16kHz mono WAV using ffmpeg."""
+    ext = input_filename.rsplit(".", 1)[-1].lower() if "." in input_filename else "webm"
 
-    TODO: Replace with real ASR pipeline:
-      1. audio_bytes → Whisper / Deepgram
-      2. post-processing (normalize dates, phones, etc.)
-    """
-    field = get_field(template_id, field_index)
-    field_name = field["field_name"] if field else "unknown"
-    transcript = _MOCK_TRANSCRIPTS.get(field_name, "sample answer")
+    with tempfile.TemporaryDirectory() as tmp:
+        in_path = Path(tmp) / f"input.{ext}"
+        out_path = Path(tmp) / "output.wav"
 
-    return {
-        "transcript": transcript,
-        "parsed_value": transcript,   # In real version, apply normalizer
-        "confidence": 0.95,
-        "field_name": field_name,
-    }
+        in_path.write_bytes(audio_bytes)
+
+        cmd = [
+            _FFMPEG, "-y",
+            "-i", str(in_path),
+            "-ar", "16000",       # 16kHz sample rate (Whisper optimal)
+            "-ac", "1",           # mono
+            "-c:a", "pcm_s16le",  # 16-bit PCM WAV
+            str(out_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            log.error("ffmpeg failed: %s", result.stderr[:500])
+            raise RuntimeError(f"ffmpeg conversion failed: {result.stderr[:200]}")
+
+        wav_bytes = out_path.read_bytes()
+        log.info("Converted %d bytes (%s) → %d bytes WAV", len(audio_bytes), ext, len(wav_bytes))
+        return wav_bytes
+
+
+async def transcribe(audio_bytes: bytes, filename: str = "recording.wav") -> dict:
+    # Convert to WAV if not already
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "wav"
+    if ext != "wav":
+        audio_bytes = _convert_to_wav(audio_bytes, filename)
+        filename = "recording.wav"
+
+    url = f"{WHISPER_BASE_URL}/v1/audio/transcriptions"
+    log.info("Sending %d bytes WAV to Whisper", len(audio_bytes))
+
+    async with httpx.AsyncClient(timeout=WHISPER_TIMEOUT) as client:
+        resp = await client.post(
+            url,
+            headers={"Authorization": "Bearer dummy"},
+            files={"file": ("recording.wav", audio_bytes, "audio/wav")},
+            data={
+                "model": WHISPER_MODEL,
+                "language": "en",
+                "temperature": "0",
+                "response_format": "json",
+            },
+        )
+        if resp.status_code != 200:
+            body = resp.text[:500]
+            log.error("Whisper error %d: %s", resp.status_code, body)
+            raise RuntimeError(f"Whisper returned {resp.status_code}: {body}")
+        result = resp.json()
+    transcript = result.get("text", "").strip()
+    log.info("Whisper transcript (%d chars): %s", len(transcript), transcript[:120])
+    return {"transcript": transcript, "language": result.get("language")}

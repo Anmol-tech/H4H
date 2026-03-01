@@ -94,6 +94,38 @@ async def upload_audio(file: UploadFile = File(...)):
     }
 
 
+@router.post("/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)):
+    """Accept an audio file, send it to the Whisper model, and return the transcript."""
+    from services.asr import transcribe
+
+    if not file.content_type or not file.content_type.startswith("audio/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only audio files are accepted",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty",
+        )
+
+    try:
+        result = await transcribe(data, filename=file.filename or "recording.wav")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Transcription failed: {exc}",
+        )
+
+    return {
+        "transcript": result["transcript"],
+        "language": result.get("language"),
+    }
+
+
 @router.get("/audio/{file_id}")
 async def get_audio(file_id: str):
     """Return a previously uploaded audio file by its id."""

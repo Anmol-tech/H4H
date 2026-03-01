@@ -80,17 +80,24 @@ async def answer_audio(session_id: str, audio: UploadFile = File(...)):
     session = session_manager.get_session(session_id)
     audio_bytes = await audio.read()
 
-    # ASR stub
-    result = await transcribe(audio_bytes, session.template_id, session.current_index)
+    # Real Whisper ASR
+    result = await transcribe(audio_bytes, filename=audio.filename or "recording.wav")
+
+    transcript = result["transcript"]
 
     # Move session to confirming
     session_manager.submit_answer(
         session_id,
-        transcript=result["transcript"],
-        parsed_value=result["parsed_value"],
+        transcript=transcript,
+        parsed_value=transcript,
     )
 
-    return AnswerAudioResponse(**result)
+    return AnswerAudioResponse(
+        transcript=transcript,
+        parsed_value=transcript,
+        confidence=1.0,
+        field_name="",
+    )
 
 
 # ── POST /session/{id}/confirm ──────────────────────────
