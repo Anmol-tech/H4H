@@ -19,12 +19,20 @@ WHISPER_BASE_URL = "http://165.245.130.21:8000"
 WHISPER_MODEL = "openai/whisper-large-v3"
 WHISPER_TIMEOUT = 300  # seconds — transcription can be slow for long audio
 
-# Locate ffmpeg — try PATH first, fall back to known winget install location
-_FFMPEG = shutil.which("ffmpeg") or r"C:\Users\siddh\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.0.1-full_build\bin\ffmpeg.exe"
+# Locate ffmpeg — try PATH first, fall back to common macOS install locations
+_FFMPEG = (
+    shutil.which("ffmpeg")
+    or (Path("/opt/homebrew/bin/ffmpeg").exists() and "/opt/homebrew/bin/ffmpeg")
+    or (Path("/usr/local/bin/ffmpeg").exists() and "/usr/local/bin/ffmpeg")
+    or None
+)
 
 
 def _convert_to_wav(audio_bytes: bytes, input_filename: str) -> bytes:
     """Convert any audio format to 16kHz mono WAV using ffmpeg."""
+    if not _FFMPEG:
+        raise RuntimeError("ffmpeg not found. Install it with: brew install ffmpeg")
+
     ext = input_filename.rsplit(".", 1)[-1].lower() if "." in input_filename else "webm"
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -34,11 +42,16 @@ def _convert_to_wav(audio_bytes: bytes, input_filename: str) -> bytes:
         in_path.write_bytes(audio_bytes)
 
         cmd = [
-            _FFMPEG, "-y",
-            "-i", str(in_path),
-            "-ar", "16000",       # 16kHz sample rate (Whisper optimal)
-            "-ac", "1",           # mono
-            "-c:a", "pcm_s16le",  # 16-bit PCM WAV
+            _FFMPEG,
+            "-y",
+            "-i",
+            str(in_path),
+            "-ar",
+            "16000",  # 16kHz sample rate (Whisper optimal)
+            "-ac",
+            "1",  # mono
+            "-c:a",
+            "pcm_s16le",  # 16-bit PCM WAV
             str(out_path),
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -47,7 +60,12 @@ def _convert_to_wav(audio_bytes: bytes, input_filename: str) -> bytes:
             raise RuntimeError(f"ffmpeg conversion failed: {result.stderr[:200]}")
 
         wav_bytes = out_path.read_bytes()
-        log.info("Converted %d bytes (%s) → %d bytes WAV", len(audio_bytes), ext, len(wav_bytes))
+        log.info(
+            "Converted %d bytes (%s) → %d bytes WAV",
+            len(audio_bytes),
+            ext,
+            len(wav_bytes),
+        )
         return wav_bytes
 
 

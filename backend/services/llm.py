@@ -8,6 +8,7 @@ a high-level PDF→VLM form-analysis pipeline.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import os
@@ -17,6 +18,7 @@ from typing import Any
 
 import httpx
 from fastapi import HTTPException, status
+from PIL import Image as PILImage
 
 from services.utils.pdf_to_images import pdf_to_images
 
@@ -60,9 +62,14 @@ async def chat(
             err = resp.json()
         except Exception:
             err = resp.text
+        logger.error(f"Upstream LLM error {resp.status_code}: {err}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"message": "LLM request failed", "upstream": err},
+            detail={
+                "message": "LLM request failed",
+                "upstream_status": resp.status_code,
+                "upstream": err,
+            },
         )
 
     return resp.json()
@@ -116,45 +123,74 @@ def build_multi_image_message(
 # ── High-level PDF analysis pipeline ────────────────────
 
 FORM_ANALYSIS_PROMPT = (
-    "You are a comprehensive form-analysis assistant. You will receive one or more images "
-    "of pages from a PDF form.\n\n"
-    "CRITICAL INSTRUCTIONS:\n"
-    "1. CAREFULLY scan EVERY page and identify ALL voice-fillable fields - do not skip any fields.\n"
-    "2. INCLUDE these field types:\n"
-    "   - Text inputs (names, addresses, descriptions)\n"
-    "   - Date fields\n"
-    "   - Number fields (phone, SSN, amount, quantity)\n"
+    "You are a warm, friendly form-filling assistant helping everyday people complete government forms by voice. "
+    "You will receive one or more images of pages from a PDF form.\n\n"
+    "CRITICAL INSTRUCTIONS - READ CAREFULLY:\n"
+    "1. SCAN EVERY SINGLE PAGE COMPLETELY:\n"
+    "   - Read from top to bottom, left to right\n"
+    "   - Check all sections, headers, footers, tables, columns\n"
+    "   - Look in margins, boxes, and nested sections\n"
+    "   - Do NOT skip any pages\n"
+    "   - Do NOT stop early - continue until the last field on the last page\n"
+    "2. IDENTIFY ALL VOICE-FILLABLE FIELDS (typically 20-50+ fields per form):\n"
+    "   - Text inputs: names, titles, descriptions, addresses, cities, states, zip codes\n"
+    "   - Date fields: birth dates, event dates, application dates\n"
+    "   - Number fields: phone numbers, SSN, amounts, quantities, percentages\n"
     "   - Email addresses\n"
-    "   - Yes/No questions\n"
-    "   - Checkboxes (convert to yes/no or multiple choice questions)\n"
-    "   - Radio buttons (convert to single-choice questions)\n"
-    "   - Dropdown selections (convert to questions with options)\n"
-    "3. EXCLUDE these field types that cannot be filled by voice:\n"
-    "   - Signature fields (physical signatures)\n"
+    "   - Yes/No questions and boolean fields\n"
+    "   - Checkboxes (all checkboxes - convert to yes/no or multiple choice)\n"
+    "   - Radio buttons (convert to single-choice questions with all options)\n"
+    "   - Dropdown/selection fields (list all available options)\n"
+    "   - Text areas and comment boxes\n"
+    "3. EXCLUDE ONLY these non-voice fields:\n"
+    "   - Physical signature lines\n"
     "   - Drawing/sketch areas\n"
     "   - Barcodes or QR codes\n"
-    "   - Pre-filled administrative fields (form numbers, office use only)\n"
-    "   - File upload fields\n"
-    "4. For checkboxes and multi-select fields:\n"
-    "   - If it's a single checkbox (yes/no), use type 'yes_no'\n"
-    "   - If it's multiple checkboxes (select all that apply), use type 'checkbox' and list options in prompt\n"
-    "   - If it's radio buttons (select one), use type 'choice' and list options in prompt\n"
-    "5. For EACH field, create a simple, friendly question in plain language (avoid jargon).\n"
-    "6. Be THOROUGH - forms typically have 15-40+ voice-fillable fields.\n\n"
-    "Return ONLY a valid JSON array. Each element must have:\n"
-    '   - "field_name": a short snake_case identifier (e.g., "applicant_first_name")\n'
-    '   - "label": the exact label/text from the form (e.g., "First Name")\n'
+    "   - Pre-filled form numbers or office use only fields\n"
+    "   - File upload buttons\n"
+    "4. For checkboxes and selection fields:\n"
+    "   - Single checkbox (yes/no): use type 'yes_no'\n"
+    "   - Multiple independent checkboxes (select all that apply): use type 'checkbox' with all options listed\n"
+    "   - Radio buttons (select exactly one): use type 'choice' with all options listed\n"
+    "   - Always include ALL available options in the 'options' array\n"
+    "5. CONVERSATIONAL QUESTION STYLE - This is critical:\n"
+    "   - Write prompts as a warm, friendly human assistant would say them out loud\n"
+    "   - Use natural, spoken language — NOT bureaucratic form labels\n"
+    '   - Use contractions where natural (e.g., "What\'s", "Can you", "Could you")\n'
+    '   - Add brief context or empathy where helpful (e.g., "No worries if this changes —")\n'
+    '   - For sensitive fields (SSN, income), add a reassuring note (e.g., "This is kept private and secure.")\n'
+    "   - For choice/checkbox fields, phrase as a natural spoken question then list options\n"
+    "   - Avoid words like 'please provide', 'enter', 'input', 'specify' — use 'tell me', 'what is', 'can you share'\n"
+    "   - Keep questions SHORT and clear — one sentence ideally\n"
+    "6. COMPLETENESS CHECK:\n"
+    "   - Count fields as you go\n"
+    "   - Most government/medical forms have 25-60+ fillable fields\n"
+    "   - If you find fewer than 15 fields, you probably missed some - scan again\n"
+    "   - Continue until you've processed every visible field on every page\n\n"
+    "OUTPUT FORMAT - Return ONLY a valid JSON array. Each element must have:\n"
+    '   - "field_name": descriptive snake_case identifier (e.g., "applicant_first_name", "mailing_street_address")\n'
+    '   - "label": exact label text from the form (e.g., "First Name", "Street Address")\n'
     '   - "type": one of: text, date, ssn, phone, address, yes_no, number, email, checkbox, choice\n'
-    '   - "prompt": a friendly question in easy language\n'
-    '   - "options": (optional) for checkbox/choice types, array of available options\n\n'
-    "EXAMPLE OUTPUT:\n"
+    '   - "prompt": conversational question as a friendly assistant would say it out loud\n'
+    '   - "options": (REQUIRED for checkbox/choice types) array of all available options\n\n'
+    "CONVERSATIONAL PROMPT EXAMPLES — use this tone:\n"
     "[\n"
-    '  {"field_name":"applicant_first_name","label":"First Name","type":"text","prompt":"What is your first name?"},\n'
-    '  {"field_name":"has_insurance","label":"Do you have insurance?","type":"yes_no","prompt":"Do you have insurance coverage?"},\n'
-    '  {"field_name":"disaster_type","label":"Type of Disaster","type":"choice","prompt":"What type of disaster affected you?","options":["Hurricane","Flood","Fire","Earthquake","Other"]},\n'
-    '  {"field_name":"assistance_needed","label":"Type of assistance needed","type":"checkbox","prompt":"What types of assistance do you need? You can select multiple.","options":["Housing","Food","Medical","Transportation"]}\n'
+    '  {"field_name":"applicant_first_name","label":"First Name","type":"text","prompt":"What\'s your first name?"},\n'
+    '  {"field_name":"applicant_last_name","label":"Last Name","type":"text","prompt":"And your last name?"},\n'
+    '  {"field_name":"date_of_birth","label":"Date of Birth","type":"date","prompt":"What\'s your date of birth?"},\n'
+    '  {"field_name":"mailing_street","label":"Street Address","type":"text","prompt":"What\'s your current street address?"},\n'
+    '  {"field_name":"mailing_city","label":"City","type":"text","prompt":"What city do you live in?"},\n'
+    '  {"field_name":"mailing_state","label":"State","type":"text","prompt":"What state is that in?"},\n'
+    '  {"field_name":"mailing_zip","label":"ZIP Code","type":"number","prompt":"What\'s your ZIP code?"},\n'
+    '  {"field_name":"phone_number","label":"Phone Number","type":"phone","prompt":"What\'s the best phone number to reach you?"},\n'
+    '  {"field_name":"ssn","label":"Social Security Number","type":"ssn","prompt":"Can you share your Social Security Number? Don\'t worry — it\'s kept completely private."},\n'
+    '  {"field_name":"has_insurance","label":"Do you have insurance?","type":"yes_no","prompt":"Do you have any insurance coverage for the damaged property?"},\n'
+    '  {"field_name":"disaster_type","label":"Type of Disaster","type":"choice","prompt":"What type of disaster affected you?","options":["Hurricane","Flood","Fire","Earthquake","Tornado","Other"]},\n'
+    '  {"field_name":"assistance_needed","label":"Type of assistance needed","type":"checkbox","prompt":"What kinds of help are you looking for? You can mention as many as apply.","options":["Housing","Food","Medical","Transportation","Childcare"]}\n'
     "]\n\n"
-    "Return ONLY the complete JSON array with ALL voice-fillable fields — no markdown fences, no explanation, no truncation.\n"
+    "IMPORTANT: Return ONLY the complete JSON array with ALL voice-fillable fields from ALL pages.\n"
+    "Do NOT stop prematurely. Do NOT add markdown fences. Do NOT add explanations.\n"
+    "The JSON array should contain EVERY fillable field you found.\n"
 )
 
 
@@ -169,20 +205,36 @@ async def analyze_pdf_form(
     Returns a dict with keys: questions, raw_content, pages_analyzed, model,
     prompt_tokens, completion_tokens, total_tokens.
     """
-    # 1. Convert PDF pages to images (higher DPI for better field detection)
-    pages = pdf_to_images(pdf_path, dpi=200, fmt="png")
+    # 1. Convert PDF pages to images.
+    #    Qwen2.5-VL-3B tokenises images as 28×28px patches — large images consume
+    #    thousands of tokens quickly.  96 DPI + max-1024px-wide keeps each page
+    #    under ~1 200 patch tokens, leaving room for text + answer tokens.
+    MAX_PAGES = 5
+    MAX_IMG_WIDTH = 1024
+    pages = pdf_to_images(pdf_path, dpi=96, fmt="jpeg")
     if not pages:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="PDF produced no pages — is the file valid?",
         )
 
-    # 2. Base64-encode each page image
+    if len(pages) > MAX_PAGES:
+        logger.warning(
+            f"PDF has {len(pages)} pages — sending only first {MAX_PAGES} to stay within context limits."
+        )
+        pages = pages[:MAX_PAGES]
+
+    # 2. Resize + JPEG-encode each page in-memory (avoids re-reading from disk)
     images_b64: list[tuple[str, str]] = []
     for page in pages:
-        img_bytes = page["path"].read_bytes()
-        b64 = base64.b64encode(img_bytes).decode("ascii")
-        images_b64.append((b64, "image/png"))
+        img: PILImage.Image = page["image"]
+        if img.width > MAX_IMG_WIDTH:
+            ratio = MAX_IMG_WIDTH / img.width
+            img = img.resize((MAX_IMG_WIDTH, int(img.height * ratio)), PILImage.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        images_b64.append((b64, "image/jpeg"))
 
     # 3. Build multi-image VLM request
     user_msg = build_multi_image_message(images_b64, text=FORM_ANALYSIS_PROMPT)
@@ -192,10 +244,12 @@ async def analyze_pdf_form(
             {
                 "role": "system",
                 "content": (
-                    "You are an expert form-analysis assistant. Your task is to meticulously "
-                    "identify EVERY SINGLE fillable field across all pages of the form. "
-                    "Be comprehensive and thorough - do not skip any fields. "
-                    "Return structured JSON only with all fields found."
+                    "You are a warm, friendly voice assistant helping people fill out government forms. "
+                    "Your job is to extract EVERY fillable field from the form images and turn each one into "
+                    "a natural, conversational question — the kind a helpful human would ask out loud. "
+                    "Be thorough: scan every page completely, do not skip fields, do not stop early. "
+                    "Use contractions, empathetic phrasing, and plain language. Avoid bureaucratic wording. "
+                    "Return ONLY a complete JSON array with ALL fields found."
                 ),
             },
             user_msg,
@@ -208,11 +262,19 @@ async def analyze_pdf_form(
     raw_content = extract_content(response)
     usage = response.get("usage", {})
 
+    # Check if response might have been truncated
+    completion_tokens = usage.get("completion_tokens", 0)
+    if completion_tokens >= max_tokens * 0.95:
+        logger.warning(
+            f"Response used {completion_tokens}/{max_tokens} tokens - may have been truncated. "
+            "Consider increasing max_tokens for this PDF."
+        )
+
     logger.info(
         f"PDF form analysis complete: {len(pages)} pages analyzed, "
         f"{usage.get('total_tokens', 0)} tokens used"
     )
-    logger.debug(f"Raw VLM output (first 500 chars): {raw_content[:500]}")
+    logger.debug(f"Raw VLM output (first 500 chars): {str(raw_content)[:500]}")
 
     # 4. Parse the JSON from the LLM output
     questions = _parse_questions_json(raw_content)
@@ -220,6 +282,16 @@ async def analyze_pdf_form(
     logger.info(f"Successfully parsed {len(questions)} questions from VLM output")
     if len(questions) == 0:
         logger.warning("No questions were extracted! Check raw_content for issues.")
+    elif len(questions) < 10:
+        logger.warning(
+            f"Only {len(questions)} fields extracted - this seems low for a {len(pages)}-page form. "
+            "The model may have missed fields or stopped early."
+        )
+    elif len(questions) < 15 and len(pages) > 1:
+        logger.warning(
+            f"Only {len(questions)} fields for {len(pages)} pages - may be incomplete. "
+            "Review raw_content to verify all fields were captured."
+        )
 
     return {
         "questions": questions,

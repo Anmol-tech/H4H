@@ -154,6 +154,7 @@ class FormQuestion(BaseModel):
     options: list[str] | None = (
         None  # for checkbox/choice types, list of available options
     )
+    audio_url: str | None = None  # relative URL to pre-generated TTS audio file
 
 
 class AnalyzePdfRequest(BaseModel):

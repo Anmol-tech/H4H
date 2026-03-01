@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from models.schemas import (
     LLMChatRequest,
     LLMChatResponse,
@@ -13,6 +13,7 @@ from models.schemas import (
     FormQuestion,
 )
 from services.llm import chat, extract_content, build_image_message, analyze_pdf_form
+from services.utils.tts_cache import audio_filename, ensure_all_audio
 
 # Upload directory (same as routers/upload.py)
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -98,7 +99,7 @@ async def analyze_form(body: AnalyzeFormRequest):
 
 
 @router.post("/analyze-pdf", response_model=AnalyzePdfResponse)
-async def analyze_pdf(body: AnalyzePdfRequest):
+async def analyze_pdf(body: AnalyzePdfRequest, background_tasks: BackgroundTasks):
     """
     Full pipeline: uploaded PDF → page images → VLM → structured questions.
 
@@ -121,6 +122,15 @@ async def analyze_pdf(body: AnalyzePdfRequest):
     )
 
     questions = [FormQuestion(**q) for q in result["questions"]]
+
+    # Set audio_url immediately using the deterministic hash — the filename is
+    # known before the file exists.  Actual synthesis runs in the background so
+    # it doesn't block this response.
+    prompts = [q.prompt for q in questions]
+    for question in questions:
+        question.audio_url = f"/tts/file/{audio_filename(question.prompt)}"
+
+    background_tasks.add_task(ensure_all_audio, prompts)
 
     return AnalyzePdfResponse(
         file_id=body.file_id,

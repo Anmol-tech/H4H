@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { femaForm } from '../data/mockData';
 import './FormSession.css';
 
@@ -14,21 +14,63 @@ export default function FormSession({ pdfUrl, fileName, liveAnswers, analyzedQue
 
     const mediaRecorderRef = useRef(null);
     const chunksRef = useRef([]);
+    const audioRef = useRef(null);  // track current TTS audio element
+
+    // Helper: play a question's TTS audio (retries once if file isn't ready yet)
+    const playQuestionAudio = (audioUrl, retries = 3) => {
+        if (!audioUrl) return;
+        if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
+        }
+        const audio = new Audio(`${API_BASE}${audioUrl}`);
+        audioRef.current = audio;
+        audio.onerror = () => {
+            // File may still be generating in background — retry after a short delay
+            if (retries > 0) {
+                setTimeout(() => playQuestionAudio(audioUrl, retries - 1), 2000);
+            }
+        };
+        audio.play().catch(() => { /* autoplay blocked — user gesture required */ });
+    };
 
     // Use VLM-analyzed questions when available, fallback to mock FEMA template
-    const questions = analyzedQuestions && analyzedQuestions.length > 0
-        ? analyzedQuestions.map((q) => ({
-            id: q.id,
-            label: q.prompt || q.label,
-            fieldName: q.field_name,
-            type: q.type,
-            options: q.options || null, // for checkbox/choice fields
-        }))
-        : femaForm.questions;
+    const questions = useMemo(() =>
+        analyzedQuestions && analyzedQuestions.length > 0
+            ? analyzedQuestions.map((q) => ({
+                id: q.id,
+                label: q.prompt || q.label,
+                fieldName: q.field_name,
+                type: q.type,
+                options: q.options || null,
+                audioUrl: q.audio_url || null,
+            }))
+            : femaForm.questions,
+        [analyzedQuestions]
+    );
 
     const current = questions[currentIndex];
     const totalQuestions = questions.length;
     const progress = ((Object.keys(answers).length) / totalQuestions) * 100;
+
+    // Auto-play question audio exactly once when the current question changes
+    const lastPlayedIndexRef = useRef(-1);
+    useEffect(() => {
+        const audioUrl = questions[currentIndex]?.audioUrl;
+        if (audioUrl && lastPlayedIndexRef.current !== currentIndex) {
+            lastPlayedIndexRef.current = currentIndex;
+            playQuestionAudio(audioUrl);
+        }
+    }, [currentIndex, questions]);
+
+    // Stop audio when resetting (new form loaded)
+    useEffect(() => {
+        lastPlayedIndexRef.current = -1;
+        if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current = null;
+        }
+    }, [analyzedQuestions]);
 
     // Reset when questions change (new analysis result)
     useEffect(() => {
@@ -130,7 +172,9 @@ export default function FormSession({ pdfUrl, fileName, liveAnswers, analyzedQue
     };
 
     const handleReplay = () => {
-        // Would replay the audio question — for now it's a no-op
+        if (current && current.audioUrl) {
+            playQuestionAudio(current.audioUrl);
+        }
     };
 
     const handlePrevField = () => {

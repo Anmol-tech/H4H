@@ -9,7 +9,7 @@ from models.schemas import TTSRequest, TTSResponse
 from services import tts as tts_service
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-AUDIO_DIR = BASE_DIR / "data" / "uploads" / "audio"
+AUDIO_DIR = BASE_DIR / "assets" / "texttoaudio"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 router = APIRouter(tags=["tts"])
