@@ -1,10 +1,19 @@
 # FormWhisper
 
+![HomePage](https://d112y698adiu2z.cloudfront.net/photos/production/software_photos/004/392/433/datas/original.png)
+
+
 **Voice-driven government form filling, powered by AI.**
 
 FormWhisper lets users fill out complex PDF forms — like the FEMA Disaster Aid Form 009-0-3 — entirely by speaking. Upload any PDF, the AI reads every fillable field, asks natural spoken questions, transcribes your answers, and exports a completed, ready-to-submit PDF.
 
 Built at **Hack4Humanity** to make disaster-relief paperwork accessible to everyone, including people with limited literacy, vision impairments, or who are in crisis.
+
+---
+
+## Demo
+
+**🎥 <a href="https://youtu.be/zr9MN9_-SsE" target="_blank">Watch the demo on YouTube</a>**
 
 ---
 
